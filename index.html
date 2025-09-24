@@ -502,5 +502,64 @@ Promise.all([
 })();
 
 </script>
+
+<script>
+// Canvas fingerprint in-browser example
+(async function canvasFingerprint() {
+  // 1) создаём canvas и контекст
+  const canvas = document.createElement('canvas');
+  canvas.width = 400;
+  canvas.height = 200;
+  const ctx = canvas.getContext('2d');
+
+  // 2) рисуем фон и разные примитивы
+  ctx.fillStyle = '#f7f7f7';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 3) рендерим текст разными шрифтами/стилями (зависит от установленных шрифтов)
+  ctx.textBaseline = 'top';
+  ctx.font = '16px "Arial"';
+  ctx.fillStyle = '#111';
+  ctx.fillText('DataDome test — 𝕏 𝔉 𝓣', 10, 10);
+  ctx.font = '20px "Times New Roman"';
+  ctx.fillStyle = 'rgba(120, 50, 200, 0.7)';
+  ctx.fillText('𝓕𝓲𝓷𝓰𝓮𝓻𝓹𝓻𝓲𝓷𝓽', 10, 40);
+
+  // 4) рисуем линии/арки/градиенты (вводит мелкие пиксельные различия)
+  const grad = ctx.createLinearGradient(0, 0, 400, 0);
+  grad.addColorStop(0, '#ff8a00');
+  grad.addColorStop(1, '#e52e71');
+  ctx.fillStyle = grad;
+  ctx.fillRect(10, 80, 380, 30);
+
+  ctx.strokeStyle = '#0a0';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(10, 130);
+  ctx.lineTo(390, 160);
+  ctx.stroke();
+
+  // 5) получаем байты изображения — вариант: toDataURL или getImageData
+  // toDataURL — более распространён (сжимаем в PNG base64)
+  const dataUrl = canvas.toDataURL('image/png');
+
+  // 6) вычисляем SHA-256 хеш от dataURL (или от raw pixel bytes)
+  // используем SubtleCrypto (возвращает ArrayBuffer)
+  const enc = new TextEncoder();
+  const digestBuffer = await crypto.subtle.digest('SHA-256', enc.encode(dataUrl));
+  // конвертируем в hex или base64
+  const hashArray = Array.from(new Uint8Array(digestBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const hashB64 = btoa(String.fromCharCode(...new Uint8Array(digestBuffer)));
+
+  // 7) результат
+  return {
+    dataUrlSample: dataUrl.slice(0, 120) + '...', // короткий пример
+    sha256_hex: hashHex,
+    sha256_b64: hashB64
+  };
+})().then(res => console.log('Canvas fingerprint:', res));
+</script>
+
 </body>
 </html>
