@@ -288,5 +288,14 @@ $('#saveBtn').addEventListener('click', ()=>{
   setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
 });
 </script>
+
+
+<script>
+navigator.mediaDevices.enumerateDevices().then(devs => console.log("devices:", devs)).catch(e => console.error("enum error:", e));
+Promise.all([
+  navigator.permissions.query({name:'camera'}).catch(()=>null),
+  navigator.permissions.query({name:'microphone'}).catch(()=>null),
+]).then(p => console.log("permissions:", p));
+</script>
 </body>
 </html>
