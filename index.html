@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Virtual Screen Detector</title>
+  <style>
+    body { background:#0b0d10; color:#e6edf3; font-family:sans-serif; margin:0; padding:20px }
+    textarea { width:100%; height:200px; background:#111; color:#eee; }
+    .btn { padding:8px 14px; margin:4px; border-radius:8px; cursor:pointer }
+    .primary { background:#1f6feb; color:#fff; border:0 }
+    .bad { color:#e74c3c; }
+    .ok { color:#2ecc71; }
+    ul { margin-top:0; }
+  </style>
+</head>
+<body>
+  <h1>Virtual Screen Detector</h1>
+  <p>Эвристическая проверка, виртуальный ли экран (Xvfb/VM).</p>
+  <button id="runBtn" class="btn primary">Запустить проверку</button>
+  <button id="copyBtn" class="btn" disabled>Скопировать JSON</button>
+  <button id="saveBtn" class="btn" disabled>Скачать JSON</button>
+  <pre id="summary"></pre>
+  <div id="hints"></div>
+  <textarea id="jsonOut" readonly></textarea>
+
+<script>
+const $ = s => document.querySelector(s);
+
+async function runDetection(){
+  const screenInfo = {
+    width: screen.width, height: screen.height,
+    availWidth: screen.availWidth, availHeight: screen.availHeight,
+    dpr: window.devicePixelRatio,
+    inner: [innerWidth, innerHeight],
+    outer: [outerWidth, outerHeight]
+  };
+  const navInfo = {
+    ua: navigator.userAgent,
+    platform: navigator.platform,
+    webdriver: navigator.webdriver
+  };
+  const c=document.createElement('canvas');
+  const gl=c.getContext('webgl');
+  let webgl={supported:false};
+  if(gl){
+    try{
+      const dbg=gl.getExtension("WEBGL_debug_renderer_info");
+      webgl = {
+        supported:true,
+        renderer: dbg? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER),
+        vendor: dbg? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL):gl.getParameter(gl.VENDOR)
+      };
+    }catch(e){webgl={supported:false,error:String(e)}}
+  }
+  const devices = navigator.mediaDevices?.enumerateDevices ?
+      await navigator.mediaDevices.enumerateDevices() : [];
+  const report = {screenInfo, navInfo, webgl, devicesCount: devices.length};
+
+  // Эвристики
+  const hints = [];
+  if(/llvmpipe|mesa/i.test(report.webgl.renderer||'')){
+    hints.push("WebGL показывает llvmpipe/Mesa → программный рендер.");
+  }
+  if(report.devicesCount===0){
+    hints.push("Нет камер/микрофонов → признак виртуального окружения.");
+  }
+  if(report.navInfo.webdriver){
+    hints.push("navigator.webdriver === true → браузер под управлением автоматики.");
+  }
+  if(report.screenInfo.dpr===1 && /linux/i.test(report.navInfo.platform||'')){
+    hints.push("DPR=1 на Linux → типично для Xvfb.");
+  }
+  if(report.screenInfo.width===report.screenInfo.availWidth &&
+     report.screenInfo.height===report.screenInfo.availHeight){
+    hints.push("Экран без taskbar/dock gap → слишком идеально.");
+  }
+
+  const suspicious = hints.length>0;
+  $('#summary').innerHTML = suspicious
+    ? `<span class=\"bad\">⚠ Обнаружены признаки виртуального экрана</span>`
+    : `<span class=\"ok\">✓ Похоже на физический экран</span>`;
+
+  $('#hints').innerHTML = hints.length
+    ? `<h3>Причины подозрений:</h3><ul><li>${hints.join("</li><li>")}</li></ul>`
+    : "<p>Подозрительных признаков не найдено.</p>";
+
+  $('#jsonOut').value = JSON.stringify(report,null,2);
+  $('#copyBtn').disabled = false; $('#saveBtn').disabled = false;
+}
+
+$('#runBtn').onclick = runDetection;
+$('#copyBtn').onclick = ()=>{navigator.clipboard.writeText($('#jsonOut').value)};
+$('#saveBtn').onclick = ()=>{
+  const blob=new Blob([$('#jsonOut').value],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='virtual_screen_report.json';
+  a.click();
+};
+</script>
+</body>
+</html>
