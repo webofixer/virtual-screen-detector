@@ -561,5 +561,85 @@ Promise.all([
 })().then(res => console.log('Canvas fingerprint:', res));
 </script>
 
+<script>
+// Перехват fetch и XHR в браузере — печатает url и тело запроса (для JSON/form/text)
+(function(){
+  // перехват fetch
+  const origFetch = window.fetch;
+  window.fetch = async function(input, init){
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '<unknown>';
+      let body = init && init.body;
+      // попытка декодировать common-пакетов
+      try {
+        if (body instanceof FormData) {
+          const obj = {};
+          for (const [k,v] of body.entries()) obj[k] = v;
+          body = obj;
+        } else if (typeof body === 'string') {
+          try { body = JSON.parse(body); } catch(e){ /* leave string */ }
+        }
+      } catch(e){}
+      console.groupCollapsed('Intercept fetch -> ' + url);
+      console.log('url:', url);
+      console.log('options:', init);
+      console.log('body:', body);
+      console.groupEnd();
+    } catch (e) { console.warn('fetch interceptor error', e); }
+    return origFetch.apply(this, arguments);
+  };
+
+  // перехват XHR.send
+  (function(){
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this.__ddm_intercept = { method, url };
+      return origOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+      try {
+        const info = this.__ddm_intercept || {};
+        let parsed = body;
+        // попытки распарсить body
+        try {
+          if (typeof body === 'string') {
+            try { parsed = JSON.parse(body); } catch(e) {
+              // maybe urlencoded
+              if (body.indexOf('=') !== -1 && body.indexOf('&') !== -1) {
+                const obj = {};
+                body.split('&').forEach(p=>{
+                  const [k,v] = p.split('=');
+                  obj[decodeURIComponent(k)] = decodeURIComponent(v||'');
+                });
+                parsed = obj;
+              }
+            }
+          } else if (body instanceof FormData) {
+            const obj = {};
+            for (const [k,v] of body.entries()) obj[k] = v;
+            parsed = obj;
+          }
+        } catch(e){}
+        console.groupCollapsed('Intercept XHR -> ' + (info.url||'<unknown>'));
+        console.log('method:', info.method);
+        console.log('url:', info.url);
+        console.log('body raw:', body);
+        console.log('body parsed:', parsed);
+        // если это объект, вывести ключи
+        if (parsed && typeof parsed === 'object') {
+          try { console.log('fields:', Object.keys(parsed)); } catch(e){}
+        }
+        console.groupEnd();
+      } catch(e){ console.warn('xhr interceptor error', e); }
+      return origSend.apply(this, arguments);
+    };
+  })();
+
+  console.info('Network interceptors for fetch and XHR installed.');
+})();
+</script>
+
+
 </body>
 </html>
