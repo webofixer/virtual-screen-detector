@@ -297,5 +297,210 @@ Promise.all([
   navigator.permissions.query({name:'microphone'}).catch(()=>null),
 ]).then(p => console.log("permissions:", p));
 </script>
+
+
+<script>
+// reality-check.js
+(async () => {
+  const out = {
+    when: new Date().toISOString(),
+    ua: navigator.userAgent,
+    platform: navigator.platform,
+    languages: navigator.languages,
+    timezoneOffset: new Date().getTimezoneOffset(),
+    locale: Intl.DateTimeFormat().resolvedOptions().locale,
+    hw: {
+      dpr: window.devicePixelRatio || 0,
+      screen: { w: screen.width, h: screen.height, aw: screen.availWidth, ah: screen.availHeight, colorDepth: screen.colorDepth },
+      cores: navigator.hardwareConcurrency ?? null,
+      deviceMemory: navigator.deviceMemory ?? null,
+      touchPoints: navigator.maxTouchPoints ?? 0
+    },
+    nav: {
+      plugins: (navigator.plugins && Array.from(navigator.plugins).map(p => p.name)) || [],
+      mimeTypes: (navigator.mimeTypes && Array.from(navigator.mimeTypes).map(m => m.type)) || [],
+      webdriver: navigator.webdriver === true
+    },
+    permissions: {},
+    webrtc: { candidates: [], hasRTCPeerConnection: !!window.RTCPeerConnection },
+    mediaDevices: { kinds: {}, total: 0 },
+    webgl: {},
+    canvasHash: null,
+    fontsProbe: {}
+  };
+
+  // ----- Canvas fingerprint (без внешних изображений, поэтому не tainted)
+  try {
+    const c = document.createElement('canvas');
+    c.width = 280; c.height = 80;
+    const ctx = c.getContext('2d');
+    ctx.textBaseline = 'top';
+    ctx.font = "14px 'Arial'";
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(125,1,62,20);
+    ctx.fillStyle = '#069';
+    ctx.fillText('RealityCheck-' + (navigator.hardwareConcurrency||'x'), 2, 2);
+    ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+    ctx.fillText('𝕋𝕖𝕤𝕥', 4, 18);
+    const dataUrl = c.toDataURL('image/png');
+    // быстрый poor-man hash
+    let hash = 0;
+    for (let i = 0; i < dataUrl.length; i++) {
+      hash = ((hash<<5) - hash) + dataUrl.charCodeAt(i);
+      hash |= 0;
+    }
+    out.canvasHash = hash >>> 0; // uint
+  } catch (e) { out.canvasHash = null; }
+
+  // ----- WebGL (в т.ч. UNMASKED_VENDOR/RENDERER)
+  function getParamSafe(gl, pname) { try { return gl.getParameter(pname); } catch { return null; } }
+  (function webgl() {
+    const canvas = document.createElement('canvas');
+    let gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) { out.webgl = { supported:false }; return; }
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    out.webgl = {
+      supported: true,
+      version: gl instanceof WebGL2RenderingContext ? 'webgl2' : 'webgl1',
+      vendor: String(getParamSafe(gl, gl.VENDOR)),
+      renderer: String(getParamSafe(gl, gl.RENDERER)),
+      shading: String(getParamSafe(gl, gl.SHADING_LANGUAGE_VERSION)),
+      maxTextureSize: Number(getParamSafe(gl, gl.MAX_TEXTURE_SIZE)),
+      unmaskedVendor: dbg ? String(getParamSafe(gl, dbg.UNMASKED_VENDOR_WEBGL)) : null,
+      unmaskedRenderer: dbg ? String(getParamSafe(gl, dbg.UNMASKED_RENDERER_WEBGL)) : null
+    };
+  })();
+
+  // ----- enumerateDevices (включая audiooutput)
+  try {
+    if (navigator.mediaDevices?.enumerateDevices) {
+      const list = await navigator.mediaDevices.enumerateDevices();
+      out.mediaDevices.total = list.length;
+      const kinds = {};
+      for (const d of list) kinds[d.kind] = (kinds[d.kind] || 0) + 1;
+      out.mediaDevices.kinds = kinds; // e.g. {audioinput:1, audiooutput:1, videoinput:1}
+    }
+  } catch (e) {}
+
+  // ----- Permissions (camera/microphone/notifications)
+  async function perm(name) {
+    try {
+      if (!navigator.permissions?.query) return 'unknown';
+      const s = await navigator.permissions.query({ name });
+      return s.state; // 'prompt'|'granted'|'denied'
+    } catch { return 'unknown'; }
+  }
+  out.permissions.camera = await perm('camera');
+  out.permissions.microphone = await perm('microphone');
+  out.permissions.notifications = await perm('notifications');
+
+  // ----- WebRTC ICE candidates (выдаёт типы: host/srflx/relay)
+  try {
+    if ('RTCPeerConnection' in window) {
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      pc.createDataChannel('x');
+      pc.onicecandidate = ev => {
+        if (ev.candidate && ev.candidate.candidate) {
+          const c = ev.candidate.candidate;
+          const m = c.match(/ typ (\w+) /);
+          if (m) out.webrtc.candidates.push(m[1]); // host, srflx, relay
+        }
+      };
+      const off = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+      await pc.setLocalDescription(off);
+      await new Promise(r => setTimeout(r, 800));
+      pc.close();
+    }
+  } catch (e) {}
+
+  // ----- CSS font probe (очень поверхностно)
+  (function fontProbe() {
+    const test = (font) => {
+      const s = document.createElement('span');
+      s.style.cssText = 'position:absolute;left:-9999px;font-size:72px;';
+      s.innerHTML = 'mmmmmmmmmmlli';
+      document.body.appendChild(s);
+      s.style.fontFamily = font + ', monospace';
+      const w = s.getBoundingClientRect().width;
+      s.remove();
+      return Math.round(w);
+    };
+    out.fontsProbe.sample = {
+      Arial: test('Arial'),
+      'Times New Roman': test('Times New Roman'),
+      'Courier New': test('Courier New')
+    };
+  })();
+
+  // ----- Простейший «скор реальности»
+  function scoreReality(o) {
+    let score = 0, reasons = [];
+
+    // WebGL renderer
+    const r = (o.webgl.unmaskedRenderer || o.webgl.renderer || '').toLowerCase();
+    const v = (o.webgl.unmaskedVendor || o.webgl.vendor || '').toLowerCase();
+    const BAD = ['llvmpipe','software','swiftshader','microsoft basic render','virtualbox','vmware','parallels'];
+    if (BAD.some(k => r.includes(k) || v.includes(k))) { reasons.push('software/virtual GPU'); }
+    else score += 25;
+
+    // DPR & screen
+    if (o.hw.dpr >= 1 && o.hw.dpr <= 4 && o.hw.screen.w >= 1024 && o.hw.screen.h >= 768) score += 10;
+    else reasons.push('odd DPR/screen');
+
+    // Hardware threads & memory
+    if ((o.hw.cores ?? 0) >= 2) score += 10; else reasons.push('low cores');
+    if ((o.hw.deviceMemory ?? 2) >= 2) score += 5;
+
+    // Plugins & mimeTypes (в реальных Chrome/Firefox обычно не пусто)
+    if (o.nav.plugins.length + o.nav.mimeTypes.length > 0) score += 10;
+    else reasons.push('no plugins/mimeTypes');
+
+    // enumerateDevices
+    const md = o.mediaDevices.kinds;
+    if ((md.audioinput||0) + (md.videoinput||0) + (md.audiooutput||0) >= 1) score += 15;
+    else reasons.push('no media devices');
+
+    // WebRTC
+    if (o.webrtc.candidates.length > 0) score += 5;
+
+    // Canvas hash present
+    if (o.canvasHash !== null) score += 10; else reasons.push('canvas blocked');
+
+    // Permissions states
+    if (['granted','prompt'].includes(o.permissions.camera) || ['granted','prompt'].includes(o.permissions.microphone)) score += 10;
+
+    // webdriver flag
+    if (o.nav.webdriver) reasons.push('navigator.webdriver=true'); else score += 10;
+
+    return { score: Math.min(score, 100), reasons };
+  }
+
+  const verdict = scoreReality(out);
+
+  console.log('=== Reality Check ===');
+  console.table({
+    'UA': out.ua,
+    'Platform': out.platform,
+    'DPR': out.hw.dpr,
+    'Screen': `${out.hw.screen.w}x${out.hw.screen.h} (${out.hw.screen.colorDepth}bit)`,
+    'Cores': out.hw.cores,
+    'DeviceMemory(GB)': out.hw.deviceMemory,
+    'Plugins': out.nav.plugins.length,
+    'MimeTypes': out.nav.mimeTypes.length,
+    'MediaDevices': JSON.stringify(out.mediaDevices.kinds),
+    'WebGL Vendor': out.webgl.unmaskedVendor || out.webgl.vendor,
+    'WebGL Renderer': out.webgl.unmaskedRenderer || out.webgl.renderer,
+    'MaxTexture': out.webgl.maxTextureSize,
+    'WebRTC types': out.webrtc.candidates.join(',') || 'none',
+    'CanvasHash': out.canvasHash,
+    'webdriver': out.nav.webdriver
+  });
+  console.log('Permissions:', out.permissions);
+  console.log('Fonts probe (widths):', out.fontsProbe.sample);
+  console.log('Reality score (0..100):', verdict.score, '— issues:', verdict.reasons);
+  return { details: out, verdict };
+})();
+
+</script>
 </body>
 </html>
