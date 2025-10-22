@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.12]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-v1
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # If you have requirements.txt, it will be used; otherwise install essentials for CI
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest mypy python-dotenv beautifulsoup4
+          # install package in editable mode so imports like `spinne` work
+          pip install -e .
+
+      - name: Run tests
+        env:
+          PYTHONPATH: .
+        run: pytest -q
+
+      - name: Run mypy
+        run: mypy
